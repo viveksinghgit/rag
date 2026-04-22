@@ -101,6 +101,8 @@
     "qdrantDnsLabel": "[concat(parameters('appName'), '-qdrant')]",
     "qdrantShareName": "qdrant-storage",
     "qdrantFqdn": "[concat(variables('qdrantDnsLabel'), '.', parameters('location'), '.azurecontainer.io')]",
+    "scriptIdentityName": "[concat(parameters('appName'), '-deploy-identity')]",
+    "contributorRoleId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c')]",
     "commonTags": {
       "project": "RAG-Azure",
       "managedBy": "ARM-Template",
@@ -123,22 +125,6 @@
         "supportsHttpsTrafficOnly": true,
         "minimumTlsVersion": "TLS1_2",
         "allowBlobPublicAccess": true
-      }
-    },
-    {
-      "comments": "Enable static website hosting on the storage account (serves the React frontend from $web container)",
-      "type": "Microsoft.Storage/storageAccounts/blobServices",
-      "apiVersion": "2023-01-01",
-      "name": "[concat(variables('storageAccountName'), '/default')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
-      ],
-      "properties": {
-        "staticWebsite": {
-          "enabled": true,
-          "indexDocument": "index.html",
-          "errorDocument404Path": "index.html"
-        }
       }
     },
     {
@@ -249,6 +235,65 @@
       }
     },
     {
+      "comments": "User-Assigned Managed Identity used by the deployment script runner",
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('scriptIdentityName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]"
+    },
+    {
+      "comments": "Grant the script identity Contributor on this resource group so deploymentScripts can create its runner container + storage",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, variables('scriptIdentityName'), 'Contributor')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('contributorRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "comments": "Enable static website hosting on storage account via CLI — ARM cannot set this directly",
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[concat(parameters('appName'), '-enable-static-web')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName'))]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName'))]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('scriptIdentityName'), 'Contributor'))]"
+      ],
+      "properties": {
+        "azCliVersion": "2.56.0",
+        "timeout": "PT10M",
+        "retentionInterval": "PT1H",
+        "cleanupPreference": "OnSuccess",
+        "environmentVariables": [
+          {
+            "name": "STORAGE_ACCOUNT_NAME",
+            "value": "[variables('storageAccountName')]"
+          },
+          {
+            "name": "STORAGE_KEY",
+            "secureValue": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value]"
+          }
+        ],
+        "scriptContent": "az storage blob service-properties update --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY --static-website --index-document index.html --404-document index.html"
+      }
+    },
+    {
       "comments": "FastAPI RAG backend — Docker container on Linux App Service",
       "type": "Microsoft.Web/sites",
       "apiVersion": "2022-09-01",
@@ -314,17 +359,17 @@
       "type": "string",
       "value": "[concat('http://', variables('qdrantFqdn'), ':6333')]"
     },
-    "staticSiteUrl": {
-      "type": "string",
-      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').primaryEndpoints.web]"
-    },
     "storageAccountName": {
       "type": "string",
       "value": "[variables('storageAccountName')]"
     },
+    "staticSiteUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').primaryEndpoints.web]"
+    },
     "nextSteps": {
       "type": "string",
-      "value": "1. Push backend Docker image: docker build -t viveksinghgit/rag-backend:latest ./backend && docker push viveksinghgit/rag-backend:latest  2. Restart App Service  3. Ingest docs: POST /ingest  4. Upload React build to $web storage container"
+      "value": "1. Build and push backend image: docker build -t viveksinghgit/rag-backend:latest ./backend && docker push viveksinghgit/rag-backend:latest  2. Restart App Service in Azure Portal  3. Build React frontend: cd frontend && npm run build  4. Upload build/ to $web container in storage account  5. Ingest docs: POST https://<appName>-app.azurewebsites.net/ingest"
     }
   }
 }
