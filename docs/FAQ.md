@@ -376,7 +376,6 @@ You can use, modify, distribute freely. See LICENSE for terms.
 Still have questions? 
 - 💬 Open a GitHub Discussion
 - 🐛 Open an Issue
-- 📧 Email support (in README)
 
 ---
 

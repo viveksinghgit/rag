@@ -1,6 +1,6 @@
 #!/bin/bash
 # Quick Start Script - Run this to test the complete setup
-# Usage: bash get-started.sh
+# Usage- bash get-started.sh
 
 set -e  # Exit on error
 

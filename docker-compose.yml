@@ -86,7 +86,7 @@ services:
       retries: 5
       start_period: 30s
 
-  # Node.js frontend (development server)
+  # Node.js frontend (dev server)
   frontend:
     image: node:18-alpine
     container_name: rag-frontend
