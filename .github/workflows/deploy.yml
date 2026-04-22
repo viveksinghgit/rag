@@ -1,0 +1,201 @@
+name: Build & Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_arm:
+        description: "Skip ARM template deployment (infra already exists)"
+        type: boolean
+        default: false
+      ingest_docs:
+        description: "Trigger document ingestion after deploy"
+        type: boolean
+        default: true
+
+# Prevent concurrent deploys; cancel any in-progress run on the same branch
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/rag-backend
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "18"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1. Build & push backend Docker image to Docker Hub
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-backend:
+    name: Build backend image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache
+          cache-to:   type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2. Build React frontend
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-frontend:
+    name: Build React frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install & build
+        working-directory: frontend
+        env:
+          # Points at the App Service URL; set in GitHub Variables (not Secrets) if you want
+          REACT_APP_API_URL: https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/build/
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 3. Deploy ARM template + post-deploy Azure config (runs after builds complete)
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy-azure:
+    name: Deploy to Azure
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend]
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/build/
+
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── 3a. Deploy ARM template (skippable if infra already exists) ──────────
+      - name: Deploy ARM template
+        if: ${{ !inputs.skip_arm }}
+        uses: azure/arm-deploy@v1
+        with:
+          resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          template: ./terraform/azuredeploy.json
+          parameters: >
+            appName=${{ secrets.AZURE_APP_NAME }}
+            qdrantAdminKey=${{ secrets.QDRANT_ADMIN_KEY }}
+            groqApiKey=${{ secrets.GROQ_API_KEY }}
+            mistralApiKey=${{ secrets.MISTRAL_API_KEY }}
+            backendDockerImage=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/rag-backend:sha-${{ github.sha }}
+
+      # ── 3b. Enable static website on Blob Storage ────────────────────────────
+      - name: Enable static website hosting
+        run: |
+          az storage blob service-properties update \
+            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
+            --account-key  "${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}" \
+            --static-website \
+            --index-document index.html \
+            --404-document index.html
+
+      # ── 3c. Upload React build to $web container ─────────────────────────────
+      - name: Upload frontend to Blob Storage
+        run: |
+          az storage blob upload-batch \
+            --account-name "${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
+            --account-key  "${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}" \
+            --source frontend/build/ \
+            --destination '$web' \
+            --overwrite true
+
+      # ── 3d. Update App Service to pull the new Docker image ──────────────────
+      - name: Update App Service Docker image
+        run: |
+          az webapp config container set \
+            --name "${{ secrets.AZURE_APP_NAME }}-app" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --docker-custom-image-name "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/rag-backend:sha-${{ github.sha }}"
+
+      # ── 3e. Restart App Service to pick up the new image ─────────────────────
+      - name: Restart App Service
+        run: |
+          az webapp restart \
+            --name "${{ secrets.AZURE_APP_NAME }}-app" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}"
+
+      # ── 3f. Wait for backend to be healthy ───────────────────────────────────
+      - name: Wait for backend health
+        run: |
+          BACKEND_URL="https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
+          echo "Waiting for $BACKEND_URL/health ..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -sf "$BACKEND_URL/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Backend healthy after $i attempts"
+              break
+            fi
+            echo "  attempt $i — HTTP $STATUS, retrying in 15s..."
+            sleep 15
+          done
+          curl -sf "$BACKEND_URL/health" | python3 -m json.tool
+
+      # ── 3g. Trigger document ingestion (optional) ────────────────────────────
+      - name: Ingest documents
+        if: ${{ inputs.ingest_docs != false }}
+        run: |
+          BACKEND_URL="https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
+          echo "Triggering document ingestion..."
+          curl -sf -X POST "$BACKEND_URL/ingest" | python3 -m json.tool
+
+      # ── 3h. Print deployment summary ─────────────────────────────────────────
+      - name: Deployment summary
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════"
+          echo "  Deployment complete!"
+          echo "══════════════════════════════════════════════"
+          echo ""
+          echo "  Backend API : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
+          echo "  Swagger UI  : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net/docs"
+          echo "  Qdrant      : ${{ secrets.AZURE_APP_NAME }}-qdrant.${{ secrets.AZURE_REGION || 'eastus' }}.azurecontainer.io:6333"
+          echo ""

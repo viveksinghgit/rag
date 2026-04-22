@@ -2,7 +2,7 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "description": "RAG Azure — Retrieval-Augmented Generation on Azure. Deploys FastAPI backend (App Service), Qdrant vector DB (Container Instance), and Blob Storage."
+    "description": "RAG Azure — deploys FastAPI backend (App Service), Qdrant vector DB (Container Instance), and Blob Storage. Post-deploy steps (static website, Docker image push) are handled by GitHub Actions."
   },
   "parameters": {
     "appName": {
@@ -37,28 +37,28 @@
       "type": "securestring",
       "minLength": 16,
       "metadata": {
-        "description": "Secret key to protect the Qdrant vector database. Use a strong random string (e.g. a UUID). You will need this if you ever connect to Qdrant directly."
+        "description": "Secret key to protect the Qdrant vector database. Use a strong random string (e.g. a UUID)."
       }
     },
     "groqApiKey": {
       "type": "securestring",
       "defaultValue": "",
       "metadata": {
-        "description": "Groq API key for cloud LLM inference — free at console.groq.com. Required for the system to answer questions. Leave empty only if you plan to bring your own LLM later."
+        "description": "Groq API key for cloud LLM inference — free at console.groq.com. Required for the system to answer questions."
       }
     },
     "mistralApiKey": {
       "type": "securestring",
       "defaultValue": "",
       "metadata": {
-        "description": "Mistral API key (optional). Used as fallback when Groq is rate-limited. Get at console.mistral.ai."
+        "description": "Mistral API key (optional fallback). Get at console.mistral.ai."
       }
     },
     "backendDockerImage": {
       "type": "string",
       "defaultValue": "docker.io/viveksinghgit/rag-backend:latest",
       "metadata": {
-        "description": "Docker image for the FastAPI backend. Must be publicly accessible or you must supply registry credentials."
+        "description": "Docker image for the FastAPI backend. Must be publicly accessible, or supply registry credentials below."
       }
     },
     "appServiceSku": {
@@ -73,24 +73,18 @@
       "type": "int",
       "defaultValue": 1,
       "allowedValues": [1, 2],
-      "metadata": {
-        "description": "CPU cores for the Qdrant Container Instance."
-      }
+      "metadata": { "description": "CPU cores for the Qdrant Container Instance." }
     },
     "qdrantMemoryGb": {
       "type": "int",
       "defaultValue": 1,
       "allowedValues": [1, 2, 4],
-      "metadata": {
-        "description": "Memory (GB) for the Qdrant Container Instance."
-      }
+      "metadata": { "description": "Memory (GB) for the Qdrant Container Instance." }
     },
     "qdrantStorageGb": {
       "type": "int",
       "defaultValue": 10,
-      "metadata": {
-        "description": "Persistent file share size (GB) for Qdrant vector storage."
-      }
+      "metadata": { "description": "Persistent file share size (GB) for Qdrant vector storage." }
     }
   },
   "variables": {
@@ -101,8 +95,6 @@
     "qdrantDnsLabel": "[concat(parameters('appName'), '-qdrant')]",
     "qdrantShareName": "qdrant-storage",
     "qdrantFqdn": "[concat(variables('qdrantDnsLabel'), '.', parameters('location'), '.azurecontainer.io')]",
-    "scriptIdentityName": "[concat(parameters('appName'), '-deploy-identity')]",
-    "contributorRoleId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c')]",
     "commonTags": {
       "project": "RAG-Azure",
       "managedBy": "ARM-Template",
@@ -111,15 +103,13 @@
   },
   "resources": [
     {
-      "comments": "Storage account — hosts documents blob container, Qdrant file share, and static React frontend",
+      "comments": "Storage account — documents blob container + Qdrant file share + static React frontend ($web)",
       "type": "Microsoft.Storage/storageAccounts",
       "apiVersion": "2023-01-01",
       "name": "[variables('storageAccountName')]",
       "location": "[parameters('location')]",
       "tags": "[variables('commonTags')]",
-      "sku": {
-        "name": "Standard_LRS"
-      },
+      "sku": { "name": "Standard_LRS" },
       "kind": "StorageV2",
       "properties": {
         "supportsHttpsTrafficOnly": true,
@@ -128,16 +118,14 @@
       }
     },
     {
-      "comments": "Blob container for ingested documents",
+      "comments": "Blob container for ingested documents (private)",
       "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
       "apiVersion": "2023-01-01",
       "name": "[concat(variables('storageAccountName'), '/default/documents')]",
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
       ],
-      "properties": {
-        "publicAccess": "None"
-      }
+      "properties": { "publicAccess": "None" }
     },
     {
       "comments": "Azure File Share for Qdrant persistent vector storage",
@@ -147,27 +135,21 @@
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
       ],
-      "properties": {
-        "shareQuota": "[parameters('qdrantStorageGb')]"
-      }
+      "properties": { "shareQuota": "[parameters('qdrantStorageGb')]" }
     },
     {
-      "comments": "App Service plan — Linux, hosts the FastAPI backend container",
+      "comments": "App Service plan — Linux container host",
       "type": "Microsoft.Web/serverfarms",
       "apiVersion": "2022-09-01",
       "name": "[variables('appServicePlanName')]",
       "location": "[parameters('location')]",
       "tags": "[variables('commonTags')]",
       "kind": "linux",
-      "sku": {
-        "name": "[parameters('appServiceSku')]"
-      },
-      "properties": {
-        "reserved": true
-      }
+      "sku": { "name": "[parameters('appServiceSku')]" },
+      "properties": { "reserved": true }
     },
     {
-      "comments": "Qdrant vector database running as a Container Instance with persistent file share",
+      "comments": "Qdrant vector database — Container Instance with persistent Azure File Share",
       "type": "Microsoft.ContainerInstance/containerGroups",
       "apiVersion": "2023-05-01",
       "name": "[variables('qdrantGroupName')]",
@@ -183,12 +165,7 @@
         "ipAddress": {
           "type": "Public",
           "dnsNameLabel": "[variables('qdrantDnsLabel')]",
-          "ports": [
-            {
-              "protocol": "TCP",
-              "port": 6333
-            }
-          ]
+          "ports": [{ "protocol": "TCP", "port": 6333 }]
         },
         "volumes": [
           {
@@ -211,86 +188,17 @@
                   "memoryInGB": "[parameters('qdrantMemoryGb')]"
                 }
               },
-              "ports": [
-                {
-                  "protocol": "TCP",
-                  "port": 6333
-                }
-              ],
+              "ports": [{ "protocol": "TCP", "port": 6333 }],
               "environmentVariables": [
                 {
                   "name": "QDRANT__SERVICE__API_KEY",
                   "secureValue": "[parameters('qdrantAdminKey')]"
                 }
               ],
-              "volumeMounts": [
-                {
-                  "name": "qdrant-storage",
-                  "mountPath": "/qdrant/storage"
-                }
-              ]
+              "volumeMounts": [{ "name": "qdrant-storage", "mountPath": "/qdrant/storage" }]
             }
           }
         ]
-      }
-    },
-    {
-      "comments": "User-Assigned Managed Identity used by the deployment script runner",
-      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
-      "name": "[variables('scriptIdentityName')]",
-      "location": "[parameters('location')]",
-      "tags": "[variables('commonTags')]"
-    },
-    {
-      "comments": "Grant the script identity Contributor on this resource group so deploymentScripts can create its runner container + storage",
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "name": "[guid(resourceGroup().id, variables('scriptIdentityName'), 'Contributor')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName'))]"
-      ],
-      "properties": {
-        "roleDefinitionId": "[variables('contributorRoleId')]",
-        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName')), '2023-01-31').principalId]",
-        "principalType": "ServicePrincipal"
-      }
-    },
-    {
-      "comments": "Enable static website hosting on storage account via CLI — ARM cannot set this directly",
-      "type": "Microsoft.Resources/deploymentScripts",
-      "apiVersion": "2023-08-01",
-      "name": "[concat(parameters('appName'), '-enable-static-web')]",
-      "location": "[parameters('location')]",
-      "tags": "[variables('commonTags')]",
-      "kind": "AzureCLI",
-      "identity": {
-        "type": "UserAssigned",
-        "userAssignedIdentities": {
-          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName'))]": {}
-        }
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdentityName'))]",
-        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, variables('scriptIdentityName'), 'Contributor'))]"
-      ],
-      "properties": {
-        "azCliVersion": "2.56.0",
-        "timeout": "PT10M",
-        "retentionInterval": "PT1H",
-        "cleanupPreference": "OnSuccess",
-        "environmentVariables": [
-          {
-            "name": "STORAGE_ACCOUNT_NAME",
-            "value": "[variables('storageAccountName')]"
-          },
-          {
-            "name": "STORAGE_KEY",
-            "secureValue": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value]"
-          }
-        ],
-        "scriptContent": "az storage blob service-properties update --account-name $STORAGE_ACCOUNT_NAME --account-key $STORAGE_KEY --static-website --index-document index.html --404-document index.html"
       }
     },
     {
@@ -300,12 +208,12 @@
       "name": "[variables('backendAppName')]",
       "location": "[parameters('location')]",
       "tags": "[variables('commonTags')]",
+      "kind": "app,linux,container",
       "dependsOn": [
         "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
         "[resourceId('Microsoft.ContainerInstance/containerGroups', variables('qdrantGroupName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
       ],
-      "kind": "app,linux,container",
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
         "httpsOnly": true,
@@ -363,13 +271,17 @@
       "type": "string",
       "value": "[variables('storageAccountName')]"
     },
-    "staticSiteUrl": {
+    "storageAccountKey": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').primaryEndpoints.web]"
+      "value": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value]"
+    },
+    "resourceGroup": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
     },
     "nextSteps": {
       "type": "string",
-      "value": "1. Build and push backend image: docker build -t viveksinghgit/rag-backend:latest ./backend && docker push viveksinghgit/rag-backend:latest  2. Restart App Service in Azure Portal  3. Build React frontend: cd frontend && npm run build  4. Upload build/ to $web container in storage account  5. Ingest docs: POST https://<appName>-app.azurewebsites.net/ingest"
+      "value": "Add these GitHub Secrets to your repo, then push to main to trigger the CI/CD workflow: AZURE_CREDENTIALS (service principal JSON), AZURE_RESOURCE_GROUP, AZURE_APP_NAME, AZURE_STORAGE_ACCOUNT_NAME, AZURE_STORAGE_ACCOUNT_KEY (from outputs above), QDRANT_ADMIN_KEY, GROQ_API_KEY, DOCKERHUB_USERNAME, DOCKERHUB_TOKEN"
     }
   }
 }
