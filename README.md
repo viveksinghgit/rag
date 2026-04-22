@@ -257,7 +257,78 @@ The first `docker-compose up` downloads `qwen2.5:0.5b` (~400MB) and `nomic-embed
 
 ---
 
-## Azure Deployment (Manual)
+## Azure Deployment
+
+### Option A — 1-Click (Portal)
+
+Click the **Deploy to Azure** button at the top. Once the ARM deployment finishes, follow up with Option B step 3 onwards to push the Docker image and enable the static frontend.
+
+### Option B — GitHub Actions CI/CD (recommended)
+
+Every push to `main` automatically builds the Docker image, deploys infrastructure, enables the static website, uploads the React frontend, and ingests documents. You only set this up once.
+
+#### Step 1 — Create a service principal
+
+Run this in Azure CLI (use `--display-name`, not `--name` — the `--name` flag is deprecated and causes an `identifierUris` validation error in some tenants):
+
+```bash
+az ad sp create-for-rbac \
+  --display-name "rag-github-deploy" \
+  --role Contributor \
+  --scopes /subscriptions/<subscription-id>/resourceGroups/<resource-group> \
+  --json-auth
+```
+
+> If your CLI version is older than 2.37, replace `--json-auth` with `--sdk-auth`. Both produce the same JSON format.
+
+Copy the full JSON output — you'll use it as `AZURE_CREDENTIALS` in the next step.
+
+#### Step 2 — Add GitHub Secrets
+
+Go to your repo → **Settings → Secrets and variables → Actions → New repository secret** and add:
+
+| Secret | Value | Where to get it |
+|---|---|---|
+| `AZURE_CREDENTIALS` | Full JSON from Step 1 | Step 1 output |
+| `AZURE_RESOURCE_GROUP` | e.g. `ragvstest` | Your Azure resource group name |
+| `AZURE_APP_NAME` | e.g. `ragvstest` | The `appName` you used in the ARM deploy |
+| `AZURE_STORAGE_ACCOUNT_NAME` | e.g. `ragvstestsa` | ARM deployment → Outputs tab |
+| `AZURE_STORAGE_ACCOUNT_KEY` | Long base64 string | ARM deployment → Outputs tab |
+| `QDRANT_ADMIN_KEY` | Your Qdrant secret key | Same key used in ARM deploy |
+| `GROQ_API_KEY` | `gsk_...` | [console.groq.com/keys](https://console.groq.com/keys) |
+| `MISTRAL_API_KEY` | Optional | [console.mistral.ai](https://console.mistral.ai/api-keys/) |
+| `DOCKERHUB_USERNAME` | Your Docker Hub username | hub.docker.com |
+| `DOCKERHUB_TOKEN` | Access token | Docker Hub → Account Settings → Security → New Access Token |
+
+#### Step 3 — First deploy
+
+```bash
+git push origin main
+```
+
+The workflow (`.github/workflows/deploy.yml`) will:
+1. Build and push the backend Docker image (`viveksinghgit/rag-backend:sha-<commit>`)
+2. Build the React frontend
+3. Deploy/update the ARM template
+4. **Enable static website hosting** on Blob Storage (`$web` container)
+5. Upload the React build to `$web`
+6. Restart the App Service
+7. Wait for `/health` to return 200
+8. Trigger document ingestion
+
+Watch it run under the **Actions** tab of your GitHub repo.
+
+#### Re-running without re-deploying infrastructure
+
+Use **Run workflow** → check "Skip ARM template deployment":
+
+```
+Actions → Build & Deploy to Azure → Run workflow → skip_arm: true
+```
+
+This only rebuilds images, uploads frontend, and restarts the App Service — much faster (~2 min vs ~8 min).
+
+### Option C — Terraform (advanced)
 
 ```bash
 cd terraform
@@ -269,7 +340,7 @@ terraform plan
 terraform apply
 ```
 
-See [docs/DEPLOYMENT-OPTIONS.md](docs/DEPLOYMENT-OPTIONS.md) for full instructions including pushing your Docker image to Docker Hub or ACR.
+See [docs/DEPLOYMENT-OPTIONS.md](docs/DEPLOYMENT-OPTIONS.md) for full instructions.
 
 ---
 
@@ -282,7 +353,7 @@ See [docs/DEPLOYMENT-OPTIONS.md](docs/DEPLOYMENT-OPTIONS.md) for full instructio
 - [x] LiteLLM multi-provider routing (Groq + Mistral)
 - [x] Docker-compose local stack
 - [x] Terraform Azure infrastructure
-- [ ] GitHub Actions CI/CD (auto-build + deploy)
+- [x] GitHub Actions CI/CD (build + deploy + static website + ingestion)
 - [ ] Azure AD authentication
 - [ ] Streaming responses
 - [ ] Rate limiting & query caching
