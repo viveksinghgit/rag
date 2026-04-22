@@ -138,6 +138,13 @@ async def ingest_documents():
         # Run ingestion script
         ingestion_script = Path(__file__).parent.parent / "scripts" / "ingest_docs.py"
         
+        # Check if script exists
+        if not ingestion_script.exists():
+            logger.error(f"Ingestion script not found: {ingestion_script}")
+            raise HTTPException(status_code=500, detail=f"Ingestion script not found: {ingestion_script}")
+        
+        logger.info(f"Running script: {ingestion_script}")
+        
         result = subprocess.run(
             ["python", str(ingestion_script), "--docs-dir", "docs"],
             capture_output=True,
@@ -154,16 +161,24 @@ async def ingest_documents():
             }
         else:
             logger.error(f"Ingestion failed: {result.stderr}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Ingestion failed: {result.stderr[-200:]}",
-            )
+            return {
+                "status": "error",
+                "message": "Document ingestion failed",
+                "error": result.stderr[-500:],
+                "return_code": result.returncode,
+            }
     except subprocess.TimeoutExpired:
         logger.error("Ingestion timed out after 5 minutes")
-        raise HTTPException(status_code=504, detail="Ingestion timed out")
+        return {
+            "status": "error",
+            "message": "Ingestion timed out after 5 minutes",
+        }
     except Exception as e:
         logger.error(f"Error during ingestion: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "status": "error",
+            "message": str(e),
+        }
 
 
 @app.get("/config")
