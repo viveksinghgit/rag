@@ -30,31 +30,32 @@ resource "azurerm_linux_web_app" "backend" {
 
   site_config {
     minimum_tls_version = "1.2"
-    
-    docker_image_name           = "qdrant/qdrant:latest"
-    docker_registry_url         = "https://index.docker.io"
-    docker_registry_server_url  = ""
+
+    # After first deploy, update this to point to your built backend image
+    # e.g. "ghcr.io/viveksinghgit/rag/backend:latest" or an ACR image
+    docker_image_name  = "viveksinghgit/rag-backend:latest"
+    docker_registry_url = "https://index.docker.io"
   }
 
   app_settings = {
-    DEBUG                        = "false"
-    ENVIRONMENT                  = var.environment
-    QDRANT_HOST                  = azurerm_container_group.qdrant.fqdns[0]
-    QDRANT_PORT                  = "6333"
-    QDRANT_COLLECTION_NAME       = "documents"
-    QDRANT_ADMIN_KEY             = var.qdrant_admin_key
-    QDRANT_VECTOR_SIZE           = "384"
-    LITELLM_GROQ_API_KEY         = var.litellm_groq_api_key
-    LITELLM_MISTRAL_API_KEY      = var.litellm_mistral_api_key
-    LITELLM_EMBEDDING_MODEL      = "mistral-embed"
-    LITELLM_LLM_MODEL            = "groq/mixtral-8x7b-32768"
-    RETRIEVAL_LIMIT              = "5"
-    SIMILARITY_THRESHOLD         = "0.5"
-    CONTEXT_WINDOW_LIMIT         = "2000"
-    DOCKER_REGISTRY_SERVER_URL   = ""
-    DOCKER_REGISTRY_SERVER_USERNAME = ""
-    DOCKER_REGISTRY_SERVER_PASSWORD = ""
-    WEBSITES_PORT                = "8000"
+    DEBUG                              = "false"
+    ENVIRONMENT                        = var.environment
+    QDRANT_HOST                        = azurerm_container_group.qdrant.fqdns[0]
+    QDRANT_PORT                        = "6333"
+    QDRANT_COLLECTION_NAME             = "documents"
+    QDRANT_ADMIN_KEY                   = var.qdrant_admin_key
+    QDRANT_VECTOR_SIZE                 = "768"
+    QDRANT_RECREATE_ON_VECTOR_MISMATCH = "false"
+    LLM_PROVIDER                       = "litellm"
+    EMBEDDING_PROVIDER                 = "litellm"
+    LITELLM_GROQ_API_KEY               = var.litellm_groq_api_key
+    LITELLM_MISTRAL_API_KEY            = var.litellm_mistral_api_key
+    LITELLM_EMBEDDING_MODEL            = "mistral-embed"
+    LITELLM_LLM_MODEL                  = "groq/mixtral-8x7b-32768"
+    RETRIEVAL_LIMIT                    = "5"
+    SIMILARITY_THRESHOLD               = "0.5"
+    CONTEXT_WINDOW_LIMIT               = "2000"
+    WEBSITES_PORT                      = "8000"
   }
 
   logs {
@@ -97,16 +98,18 @@ resource "azurerm_storage_container" "docs" {
   container_access_type = "private"
 }
 
-# Static website hosting
-resource "azurerm_storage_blob" "web_config" {
-  name                   = "index.html"
-  storage_account_name   = azurerm_storage_account.storage.name
-  storage_container_name = "$web"
-  type                   = "Block"
-  source                 = "${path.module}/../frontend/build/index.html"
-  content_type           = "text/html"
+# File Share for Qdrant persistent storage (used by Container Instances volume mount)
+resource "azurerm_storage_share" "qdrant" {
+  name                 = "qdrant-storage"
+  storage_account_name = azurerm_storage_account.storage.name
+  quota                = var.qdrant_storage_gb
+}
 
-  depends_on = [azurerm_storage_account.storage]
+# Enable static website on storage account (hosts the React frontend)
+resource "azurerm_storage_account_static_website" "frontend" {
+  storage_account_id = azurerm_storage_account.storage.id
+  index_document     = "index.html"
+  error_404_document = "index.html"
 }
 
 # Container Instances for Qdrant
@@ -129,8 +132,8 @@ resource "azurerm_container_group" "qdrant" {
       protocol = "TCP"
     }
 
-    environment_variables = {
-      QDRANT_API_KEY = var.qdrant_admin_key
+    secure_environment_variables = {
+      QDRANT__SERVICE__API_KEY = var.qdrant_admin_key
     }
 
     volume {
@@ -138,6 +141,8 @@ resource "azurerm_container_group" "qdrant" {
       mount_path           = "/qdrant/storage"
       read_only            = false
       storage_account_name = azurerm_storage_account.storage.name
+      storage_account_key  = azurerm_storage_account.storage.primary_access_key
+      share_name           = azurerm_storage_share.qdrant.name
     }
   }
 

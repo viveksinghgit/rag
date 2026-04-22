@@ -220,6 +220,228 @@ button:disabled {
   color: #333;
 }
 
+/* RAG Intro Panel */
+.rag-intro {
+  background: #f8f9ff;
+  border: 1px solid #e0e4ff;
+  border-radius: 10px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.rag-intro-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.rag-intro-title {
+  font-size: 18px;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.rag-intro-subtitle {
+  font-size: 13px;
+  color: #666;
+  margin: 0;
+}
+
+.rag-dismiss {
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.rag-dismiss:hover {
+  color: #333;
+  background: none;
+}
+
+.rag-what {
+  font-size: 13px;
+  color: #444;
+  background: white;
+  border-left: 3px solid #667eea;
+  padding: 10px 14px;
+  border-radius: 0 6px 6px 0;
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+
+.rag-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.rag-step {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.rag-step:hover,
+.rag-step.active {
+  border-color: #667eea;
+}
+
+.rag-step-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rag-step-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.rag-step-num {
+  font-size: 10px;
+  color: #667eea;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.rag-step-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  margin: 1px 0;
+}
+
+.rag-step-short {
+  font-size: 12px;
+  color: #777;
+}
+
+.rag-step-toggle {
+  margin-left: auto;
+  font-size: 11px;
+  color: #999;
+  flex-shrink: 0;
+}
+
+.rag-step-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+  font-size: 12px;
+  color: #555;
+  line-height: 1.6;
+}
+
+.rag-pipeline-viz {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.rag-pill {
+  background: #f0f0f0;
+  border-radius: 20px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #444;
+  font-weight: 500;
+}
+
+.answer-pill {
+  background: #e8f0fe;
+  color: #667eea;
+}
+
+.rag-arrow {
+  color: #bbb;
+  font-size: 14px;
+}
+
+.rag-possibilities {
+  font-size: 13px;
+  color: #444;
+  margin-bottom: 16px;
+}
+
+.rag-possibilities strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.rag-possibilities ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+}
+
+.rag-possibilities li {
+  font-size: 12px;
+  color: #555;
+  padding: 2px 0;
+}
+
+.rag-start-btn {
+  width: 100%;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rag-start-btn:hover {
+  background: #5568d3;
+}
+
+.button-link {
+  background: none;
+  border: none;
+  color: #667eea;
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+.button-link:hover {
+  background: none;
+  color: #5568d3;
+}
+
+@media (max-width: 600px) {
+  .rag-possibilities ul {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-pipeline-viz {
+    justify-content: center;
+  }
+}
+
+/* ---- Error / Success messages ---- */
 .error-message {
   background-color: #f8d7da;
   color: #721c24;

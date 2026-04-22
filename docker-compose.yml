@@ -46,7 +46,12 @@ services:
       QDRANT__SERVICE__API_KEY: ${QDRANT_ADMIN_KEY:-local-rag-admin-key}
     volumes:
       - qdrant_storage:/qdrant/storage
-      - ./secrets:/app/secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   # FastAPI Backend
   backend:
@@ -67,9 +72,11 @@ services:
       ENVIRONMENT: "local"
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
+      # Must match QDRANT__SERVICE__API_KEY set on the qdrant service above
+      QDRANT_ADMIN_KEY: ${QDRANT_ADMIN_KEY:-local-rag-admin-key}
     depends_on:
       qdrant:
-        condition: service_started
+        condition: service_healthy
       ollama-pull:
         condition: service_completed_successfully
     healthcheck:
