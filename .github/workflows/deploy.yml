@@ -21,7 +21,6 @@ concurrency:
 
 env:
   BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/rag-backend
-  PYTHON_VERSION: "3.11"
   NODE_VERSION: "18"
 
 jobs:
@@ -32,18 +31,18 @@ jobs:
     name: Build backend image
     runs-on: ubuntu-latest
     outputs:
-      image_tag: ${{ steps.meta.outputs.version }}
+      # Full image reference with the sha- tag, e.g. goforvivek/rag-backend:sha-a1b2c3d
+      full_image: ${{ steps.image.outputs.full_image }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.BACKEND_IMAGE }}
-          tags: |
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+      # Short SHA (7 chars) — consistent between build and deploy steps
+      - name: Compute short SHA
+        id: image
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "full_image=docker.io/${{ env.BACKEND_IMAGE }}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -59,8 +58,10 @@ jobs:
         with:
           context: ./backend
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          # Push both sha- tag (for pinning) and :latest (for portal / manual pulls)
+          tags: |
+            docker.io/${{ env.BACKEND_IMAGE }}:${{ steps.image.outputs.sha_tag }}
+            docker.io/${{ env.BACKEND_IMAGE }}:latest
           cache-from: type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache
           cache-to:   type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache,mode=max
 
@@ -82,7 +83,6 @@ jobs:
       - name: Install & build
         working-directory: frontend
         env:
-          # Points at the App Service URL; set in GitHub Variables (not Secrets) if you want
           REACT_APP_API_URL: https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net
         run: |
           npm ci
@@ -96,13 +96,15 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 3. Deploy ARM template + post-deploy Azure config (runs after builds complete)
+  # 3. Deploy ARM template + post-deploy Azure config
   # ─────────────────────────────────────────────────────────────────────────────
   deploy-azure:
     name: Deploy to Azure
     runs-on: ubuntu-latest
     needs: [build-backend, build-frontend]
     environment: production
+    env:
+      FULL_IMAGE: ${{ needs.build-backend.outputs.full_image }}
     steps:
       - uses: actions/checkout@v4
 
@@ -117,7 +119,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # ── 3a. Deploy ARM template (skippable if infra already exists) ──────────
+      # ── 3a. Deploy ARM template ──────────────────────────────────────────────
       - name: Deploy ARM template
         if: ${{ !inputs.skip_arm }}
         uses: azure/arm-deploy@v1
@@ -129,7 +131,7 @@ jobs:
             qdrantAdminKey=${{ secrets.QDRANT_ADMIN_KEY }}
             groqApiKey=${{ secrets.GROQ_API_KEY }}
             mistralApiKey=${{ secrets.MISTRAL_API_KEY }}
-            backendDockerImage=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/rag-backend:sha-${{ github.sha }}
+            backendDockerImage=${{ env.FULL_IMAGE }}
 
       # ── 3b. Enable static website on Blob Storage ────────────────────────────
       - name: Enable static website hosting
@@ -151,38 +153,41 @@ jobs:
             --destination '$web' \
             --overwrite true
 
-      # ── 3d. Update App Service to pull the new Docker image ──────────────────
+      # ── 3d. Pin App Service to the exact sha- image just pushed ─────────────
       - name: Update App Service Docker image
         run: |
           az webapp config container set \
             --name "${{ secrets.AZURE_APP_NAME }}-app" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --docker-custom-image-name "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/rag-backend:sha-${{ github.sha }}"
+            --docker-custom-image-name "${{ env.FULL_IMAGE }}"
 
-      # ── 3e. Restart App Service to pick up the new image ─────────────────────
+      # ── 3e. Restart App Service ───────────────────────────────────────────────
       - name: Restart App Service
         run: |
           az webapp restart \
             --name "${{ secrets.AZURE_APP_NAME }}-app" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}"
 
-      # ── 3f. Wait for backend to be healthy ───────────────────────────────────
+      # ── 3f. Wait for backend to be healthy (5 min timeout) ───────────────────
       - name: Wait for backend health
         run: |
           BACKEND_URL="https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
-          echo "Waiting for $BACKEND_URL/health ..."
+          echo "Image deployed: ${{ env.FULL_IMAGE }}"
+          echo "Polling $BACKEND_URL/health ..."
           for i in $(seq 1 20); do
             STATUS=$(curl -sf "$BACKEND_URL/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
-              echo "Backend healthy after $i attempts"
+              echo "Backend healthy (attempt $i)"
+              curl -sf "$BACKEND_URL/health" | python3 -m json.tool
               break
             fi
-            echo "  attempt $i — HTTP $STATUS, retrying in 15s..."
+            echo "  attempt $i/20 — HTTP $STATUS, retrying in 15s..."
             sleep 15
           done
-          curl -sf "$BACKEND_URL/health" | python3 -m json.tool
+          # Final hard check — fail the step if still not up
+          curl -sf "$BACKEND_URL/health" > /dev/null
 
-      # ── 3g. Trigger document ingestion (optional) ────────────────────────────
+      # ── 3g. Trigger document ingestion ───────────────────────────────────────
       - name: Ingest documents
         if: ${{ inputs.ingest_docs != false }}
         run: |
@@ -190,15 +195,14 @@ jobs:
           echo "Triggering document ingestion..."
           curl -sf -X POST "$BACKEND_URL/ingest" | python3 -m json.tool
 
-      # ── 3h. Print deployment summary ─────────────────────────────────────────
+      # ── 3h. Summary ───────────────────────────────────────────────────────────
       - name: Deployment summary
         run: |
           echo ""
           echo "══════════════════════════════════════════════"
           echo "  Deployment complete!"
           echo "══════════════════════════════════════════════"
-          echo ""
+          echo "  Image       : ${{ env.FULL_IMAGE }}"
           echo "  Backend API : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
           echo "  Swagger UI  : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net/docs"
-          echo "  Qdrant      : ${{ secrets.AZURE_APP_NAME }}-qdrant.${{ secrets.AZURE_REGION || 'eastus' }}.azurecontainer.io:6333"
           echo ""
