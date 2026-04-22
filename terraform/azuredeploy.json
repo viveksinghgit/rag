@@ -1,0 +1,330 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "RAG Azure — Retrieval-Augmented Generation on Azure. Deploys FastAPI backend (App Service), Qdrant vector DB (Container Instance), and Blob Storage."
+  },
+  "parameters": {
+    "appName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 20,
+      "metadata": {
+        "description": "Base name for all resources — 3-20 chars, lowercase letters, numbers and hyphens only. Must be globally unique."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "allowedValues": [
+        "eastus",
+        "eastus2",
+        "westus",
+        "westus2",
+        "westus3",
+        "centralus",
+        "northeurope",
+        "westeurope",
+        "uksouth",
+        "southeastasia",
+        "australiaeast"
+      ],
+      "metadata": {
+        "description": "Azure region for all resources. Defaults to the resource group location."
+      }
+    },
+    "qdrantAdminKey": {
+      "type": "securestring",
+      "minLength": 16,
+      "metadata": {
+        "description": "Secret key to protect the Qdrant vector database. Use a strong random string (e.g. a UUID). You will need this if you ever connect to Qdrant directly."
+      }
+    },
+    "groqApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Groq API key for cloud LLM inference — free at console.groq.com. Required for the system to answer questions. Leave empty only if you plan to bring your own LLM later."
+      }
+    },
+    "mistralApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Mistral API key (optional). Used as fallback when Groq is rate-limited. Get at console.mistral.ai."
+      }
+    },
+    "backendDockerImage": {
+      "type": "string",
+      "defaultValue": "docker.io/viveksinghgit/rag-backend:latest",
+      "metadata": {
+        "description": "Docker image for the FastAPI backend. Must be publicly accessible or you must supply registry credentials."
+      }
+    },
+    "appServiceSku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "allowedValues": ["B1", "B2", "B3", "S1", "S2", "P1V2"],
+      "metadata": {
+        "description": "App Service plan SKU. B1 (~$13/mo) is sufficient for most teams."
+      }
+    },
+    "qdrantCpu": {
+      "type": "int",
+      "defaultValue": 1,
+      "allowedValues": [1, 2],
+      "metadata": {
+        "description": "CPU cores for the Qdrant Container Instance."
+      }
+    },
+    "qdrantMemoryGb": {
+      "type": "int",
+      "defaultValue": 1,
+      "allowedValues": [1, 2, 4],
+      "metadata": {
+        "description": "Memory (GB) for the Qdrant Container Instance."
+      }
+    },
+    "qdrantStorageGb": {
+      "type": "int",
+      "defaultValue": 10,
+      "metadata": {
+        "description": "Persistent file share size (GB) for Qdrant vector storage."
+      }
+    }
+  },
+  "variables": {
+    "storageAccountName": "[toLower(take(replace(concat(parameters('appName'), 'sa'), '-', ''), 24))]",
+    "appServicePlanName": "[concat(parameters('appName'), '-plan')]",
+    "backendAppName": "[concat(parameters('appName'), '-app')]",
+    "qdrantGroupName": "[concat(parameters('appName'), '-qdrant')]",
+    "qdrantDnsLabel": "[concat(parameters('appName'), '-qdrant')]",
+    "qdrantShareName": "qdrant-storage",
+    "qdrantFqdn": "[concat(variables('qdrantDnsLabel'), '.', parameters('location'), '.azurecontainer.io')]",
+    "commonTags": {
+      "project": "RAG-Azure",
+      "managedBy": "ARM-Template",
+      "repo": "https://github.com/viveksinghgit/rag"
+    }
+  },
+  "resources": [
+    {
+      "comments": "Storage account — hosts documents blob container, Qdrant file share, and static React frontend",
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "supportsHttpsTrafficOnly": true,
+        "minimumTlsVersion": "TLS1_2",
+        "allowBlobPublicAccess": true
+      }
+    },
+    {
+      "comments": "Enable static website hosting on the storage account (serves the React frontend from $web container)",
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-01-01",
+      "name": "[concat(variables('storageAccountName'), '/default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "staticWebsite": {
+          "enabled": true,
+          "indexDocument": "index.html",
+          "errorDocument404Path": "index.html"
+        }
+      }
+    },
+    {
+      "comments": "Blob container for ingested documents",
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-01-01",
+      "name": "[concat(variables('storageAccountName'), '/default/documents')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "publicAccess": "None"
+      }
+    },
+    {
+      "comments": "Azure File Share for Qdrant persistent vector storage",
+      "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+      "apiVersion": "2023-01-01",
+      "name": "[concat(variables('storageAccountName'), '/default/', variables('qdrantShareName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "shareQuota": "[parameters('qdrantStorageGb')]"
+      }
+    },
+    {
+      "comments": "App Service plan — Linux, hosts the FastAPI backend container",
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2022-09-01",
+      "name": "[variables('appServicePlanName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "kind": "linux",
+      "sku": {
+        "name": "[parameters('appServiceSku')]"
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "comments": "Qdrant vector database running as a Container Instance with persistent file share",
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('qdrantGroupName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', variables('storageAccountName'), 'default', variables('qdrantShareName'))]"
+      ],
+      "properties": {
+        "osType": "Linux",
+        "restartPolicy": "Always",
+        "ipAddress": {
+          "type": "Public",
+          "dnsNameLabel": "[variables('qdrantDnsLabel')]",
+          "ports": [
+            {
+              "protocol": "TCP",
+              "port": 6333
+            }
+          ]
+        },
+        "volumes": [
+          {
+            "name": "qdrant-storage",
+            "azureFile": {
+              "shareName": "[variables('qdrantShareName')]",
+              "storageAccountName": "[variables('storageAccountName')]",
+              "storageAccountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value]"
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "qdrant",
+            "properties": {
+              "image": "qdrant/qdrant:latest",
+              "resources": {
+                "requests": {
+                  "cpu": "[parameters('qdrantCpu')]",
+                  "memoryInGB": "[parameters('qdrantMemoryGb')]"
+                }
+              },
+              "ports": [
+                {
+                  "protocol": "TCP",
+                  "port": 6333
+                }
+              ],
+              "environmentVariables": [
+                {
+                  "name": "QDRANT__SERVICE__API_KEY",
+                  "secureValue": "[parameters('qdrantAdminKey')]"
+                }
+              ],
+              "volumeMounts": [
+                {
+                  "name": "qdrant-storage",
+                  "mountPath": "/qdrant/storage"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "comments": "FastAPI RAG backend — Docker container on Linux App Service",
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2022-09-01",
+      "name": "[variables('backendAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "[resourceId('Microsoft.ContainerInstance/containerGroups', variables('qdrantGroupName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "kind": "app,linux,container",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "linuxFxVersion": "[concat('DOCKER|', parameters('backendDockerImage'))]",
+          "minTlsVersion": "1.2",
+          "alwaysOn": true,
+          "appSettings": [
+            { "name": "DEBUG",                              "value": "false" },
+            { "name": "ENVIRONMENT",                        "value": "production" },
+            { "name": "QDRANT_HOST",                        "value": "[variables('qdrantFqdn')]" },
+            { "name": "QDRANT_PORT",                        "value": "6333" },
+            { "name": "QDRANT_COLLECTION_NAME",             "value": "documents" },
+            { "name": "QDRANT_ADMIN_KEY",                   "value": "[parameters('qdrantAdminKey')]" },
+            { "name": "QDRANT_VECTOR_SIZE",                 "value": "768" },
+            { "name": "QDRANT_RECREATE_ON_VECTOR_MISMATCH", "value": "false" },
+            { "name": "LLM_PROVIDER",                       "value": "litellm" },
+            { "name": "EMBEDDING_PROVIDER",                 "value": "litellm" },
+            { "name": "LITELLM_GROQ_API_KEY",               "value": "[parameters('groqApiKey')]" },
+            { "name": "LITELLM_MISTRAL_API_KEY",            "value": "[parameters('mistralApiKey')]" },
+            { "name": "LITELLM_LLM_MODEL",                  "value": "groq/mixtral-8x7b-32768" },
+            { "name": "LITELLM_EMBEDDING_MODEL",            "value": "mistral-embed" },
+            { "name": "RETRIEVAL_LIMIT",                    "value": "5" },
+            { "name": "SIMILARITY_THRESHOLD",               "value": "0.5" },
+            { "name": "CONTEXT_WINDOW_LIMIT",               "value": "2000" },
+            { "name": "CHUNK_SIZE",                         "value": "512" },
+            { "name": "CHUNK_OVERLAP",                      "value": "50" },
+            { "name": "WEBSITES_PORT",                      "value": "8000" },
+            { "name": "AZURE_STORAGE_ACCOUNT_NAME",         "value": "[variables('storageAccountName')]" },
+            { "name": "AZURE_STORAGE_ACCOUNT_KEY",          "value": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value]" },
+            { "name": "AZURE_STORAGE_CONTAINER",            "value": "documents" },
+            { "name": "DOCKER_REGISTRY_SERVER_URL",         "value": "https://index.docker.io" }
+          ],
+          "httpLoggingEnabled": true,
+          "detailedErrorLoggingEnabled": true,
+          "logsDirectorySizeLimit": 35
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "backendUrl": {
+      "type": "string",
+      "value": "[concat('https://', variables('backendAppName'), '.azurewebsites.net')]"
+    },
+    "backendSwaggerUrl": {
+      "type": "string",
+      "value": "[concat('https://', variables('backendAppName'), '.azurewebsites.net/docs')]"
+    },
+    "qdrantEndpoint": {
+      "type": "string",
+      "value": "[concat('http://', variables('qdrantFqdn'), ':6333')]"
+    },
+    "staticSiteUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').primaryEndpoints.web]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageAccountName')]"
+    },
+    "nextSteps": {
+      "type": "string",
+      "value": "1. Push backend Docker image: docker build -t viveksinghgit/rag-backend:latest ./backend && docker push viveksinghgit/rag-backend:latest  2. Restart App Service  3. Ingest docs: POST /ingest  4. Upload React build to $web storage container"
+    }
+  }
+}

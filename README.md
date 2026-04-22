@@ -4,7 +4,14 @@
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fviveksinghgit%2Frag%2Fmain%2Fterraform%2Fazuredeploy.json)
 
-> The Deploy to Azure button requires `terraform/azuredeploy.json` (ARM template) to be generated from the Terraform config — see [docs/DEPLOYMENT-OPTIONS.md](docs/DEPLOYMENT-OPTIONS.md).
+**One-click deploys:** App Service (FastAPI backend) + Qdrant Container Instance + Blob Storage.
+You will be prompted for: `appName`, `qdrantAdminKey`, `groqApiKey` (from [console.groq.com](https://console.groq.com/keys)).
+
+> **Before clicking**: push your backend Docker image so Azure can pull it:
+> ```bash
+> docker build -t viveksinghgit/rag-backend:latest ./backend
+> docker push viveksinghgit/rag-backend:latest
+> ```
 
 ---
 
