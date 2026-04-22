@@ -14,35 +14,22 @@ on:
         type: boolean
         default: true
 
-# Prevent concurrent deploys; cancel any in-progress run on the same branch
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/rag-backend
   NODE_VERSION: "18"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  # 1. Build & push backend Docker image to Docker Hub
+  # 1. Build & push backend Docker image
   # ─────────────────────────────────────────────────────────────────────────────
   build-backend:
     name: Build backend image
     runs-on: ubuntu-latest
-    outputs:
-      # Full image reference with the sha- tag, e.g. goforvivek/rag-backend:sha-a1b2c3d
-      full_image: ${{ steps.image.outputs.full_image }}
     steps:
       - uses: actions/checkout@v4
-
-      # Short SHA (7 chars) — consistent between build and deploy steps
-      - name: Compute short SHA
-        id: image
-        run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          echo "full_image=docker.io/${{ env.BACKEND_IMAGE }}:sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -54,16 +41,24 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          push: true
-          # Push both sha- tag (for pinning) and :latest (for portal / manual pulls)
-          tags: |
-            docker.io/${{ env.BACKEND_IMAGE }}:${{ steps.image.outputs.sha_tag }}
-            docker.io/${{ env.BACKEND_IMAGE }}:latest
-          cache-from: type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache
-          cache-to:   type=registry,ref=${{ env.BACKEND_IMAGE }}:buildcache,mode=max
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          IMAGE_BASE="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/rag-backend"
+          SHA_TAG="${IMAGE_BASE}:sha-${SHORT}"
+          LATEST_TAG="${IMAGE_BASE}:latest"
+
+          echo "Building image: ${SHA_TAG}"
+
+          docker buildx build \
+            --push \
+            --tag "${SHA_TAG}" \
+            --tag "${LATEST_TAG}" \
+            --cache-from "type=registry,ref=${IMAGE_BASE}:buildcache" \
+            --cache-to   "type=registry,ref=${IMAGE_BASE}:buildcache,mode=max" \
+            ./backend
+
+          echo "Pushed: ${SHA_TAG}"
+          echo "Pushed: ${LATEST_TAG}"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # 2. Build React frontend
@@ -96,17 +91,24 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 3. Deploy ARM template + post-deploy Azure config
+  # 3. Deploy to Azure
   # ─────────────────────────────────────────────────────────────────────────────
   deploy-azure:
     name: Deploy to Azure
     runs-on: ubuntu-latest
     needs: [build-backend, build-frontend]
     environment: production
-    env:
-      FULL_IMAGE: ${{ needs.build-backend.outputs.full_image }}
     steps:
       - uses: actions/checkout@v4
+
+      # Compute the same short SHA used in the build job — no cross-job passing needed
+      - name: Set image reference
+        id: image
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          FULL="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/rag-backend:sha-${SHORT}"
+          echo "full=${FULL}" >> "$GITHUB_OUTPUT"
+          echo "Using image: ${FULL}"
 
       - name: Download frontend build
         uses: actions/download-artifact@v4
@@ -131,9 +133,9 @@ jobs:
             qdrantAdminKey=${{ secrets.QDRANT_ADMIN_KEY }}
             groqApiKey=${{ secrets.GROQ_API_KEY }}
             mistralApiKey=${{ secrets.MISTRAL_API_KEY }}
-            backendDockerImage=${{ env.FULL_IMAGE }}
+            backendDockerImage=${{ steps.image.outputs.full }}
 
-      # ── 3b. Enable static website on Blob Storage ────────────────────────────
+      # ── 3b. Enable static website ────────────────────────────────────────────
       - name: Enable static website hosting
         run: |
           az storage blob service-properties update \
@@ -143,7 +145,7 @@ jobs:
             --index-document index.html \
             --404-document index.html
 
-      # ── 3c. Upload React build to $web container ─────────────────────────────
+      # ── 3c. Upload React build ────────────────────────────────────────────────
       - name: Upload frontend to Blob Storage
         run: |
           az storage blob upload-batch \
@@ -153,13 +155,15 @@ jobs:
             --destination '$web' \
             --overwrite true
 
-      # ── 3d. Pin App Service to the exact sha- image just pushed ─────────────
-      - name: Update App Service Docker image
+      # ── 3d. Pin App Service to the exact sha- image ─────────────────────────
+      - name: Update App Service image
         run: |
+          FULL="${{ steps.image.outputs.full }}"
+          echo "Updating App Service to: ${FULL}"
           az webapp config container set \
             --name "${{ secrets.AZURE_APP_NAME }}-app" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --docker-custom-image-name "${{ env.FULL_IMAGE }}"
+            --docker-custom-image-name "${FULL}"
 
       # ── 3e. Restart App Service ───────────────────────────────────────────────
       - name: Restart App Service
@@ -168,41 +172,40 @@ jobs:
             --name "${{ secrets.AZURE_APP_NAME }}-app" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}"
 
-      # ── 3f. Wait for backend to be healthy (5 min timeout) ───────────────────
+      # ── 3f. Wait for /health (5 min timeout) ─────────────────────────────────
       - name: Wait for backend health
         run: |
           BACKEND_URL="https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
-          echo "Image deployed: ${{ env.FULL_IMAGE }}"
-          echo "Polling $BACKEND_URL/health ..."
+          echo "Image: ${{ steps.image.outputs.full }}"
+          echo "Polling: ${BACKEND_URL}/health"
           for i in $(seq 1 20); do
-            STATUS=$(curl -sf "$BACKEND_URL/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            STATUS=$(curl -sf "${BACKEND_URL}/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
-              echo "Backend healthy (attempt $i)"
-              curl -sf "$BACKEND_URL/health" | python3 -m json.tool
+              echo "Backend healthy (attempt ${i})"
+              curl -sf "${BACKEND_URL}/health" | python3 -m json.tool
               break
             fi
-            echo "  attempt $i/20 — HTTP $STATUS, retrying in 15s..."
+            echo "  attempt ${i}/20 — HTTP ${STATUS}, retrying in 15s..."
             sleep 15
           done
-          # Final hard check — fail the step if still not up
-          curl -sf "$BACKEND_URL/health" > /dev/null
+          # Hard fail if still not up after 20 attempts
+          curl -sf "${BACKEND_URL}/health" > /dev/null
 
-      # ── 3g. Trigger document ingestion ───────────────────────────────────────
+      # ── 3g. Ingest documents ──────────────────────────────────────────────────
       - name: Ingest documents
         if: ${{ inputs.ingest_docs != false }}
         run: |
           BACKEND_URL="https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
-          echo "Triggering document ingestion..."
-          curl -sf -X POST "$BACKEND_URL/ingest" | python3 -m json.tool
+          curl -sf -X POST "${BACKEND_URL}/ingest" | python3 -m json.tool
 
       # ── 3h. Summary ───────────────────────────────────────────────────────────
       - name: Deployment summary
         run: |
           echo ""
-          echo "══════════════════════════════════════════════"
-          echo "  Deployment complete!"
-          echo "══════════════════════════════════════════════"
-          echo "  Image       : ${{ env.FULL_IMAGE }}"
-          echo "  Backend API : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
-          echo "  Swagger UI  : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net/docs"
+          echo "══════════════════════════════════════════"
+          echo "  Deployment complete"
+          echo "══════════════════════════════════════════"
+          echo "  Image      : ${{ steps.image.outputs.full }}"
+          echo "  Backend    : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net"
+          echo "  Swagger    : https://${{ secrets.AZURE_APP_NAME }}-app.azurewebsites.net/docs"
           echo ""
