@@ -50,7 +50,7 @@ resource "azurerm_linux_web_app" "backend" {
     EMBEDDING_PROVIDER                 = "litellm"
     LITELLM_GROQ_API_KEY               = var.litellm_groq_api_key
     LITELLM_MISTRAL_API_KEY            = var.litellm_mistral_api_key
-    LITELLM_EMBEDDING_MODEL            = "mistral-embed"
+    LITELLM_EMBEDDING_MODEL            = "mistral/mistral-embed"
     LITELLM_LLM_MODEL                  = "groq/mixtral-8x7b-32768"
     RETRIEVAL_LIMIT                    = "5"
     SIMILARITY_THRESHOLD               = "0.5"
