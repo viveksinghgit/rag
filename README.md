@@ -72,11 +72,11 @@ The first run pulls the Ollama models (`qwen2.5:0.5b` + `nomic-embed-text`) whic
 │  GET  /health →  Service Status                             │
 │  GET  /config →  Non-sensitive config                       │
 │                                                             │
-│  ┌─────────────────┐    ┌──────────────────────────────┐   │
-│  │  EmbeddingMgr   │    │        LLMRouter             │   │
-│  │  (LRU cache)    │    │  Ollama (local) or           │   │
-│  └────────┬────────┘    │  LiteLLM → Groq / Mistral   │   │
-│           │             └──────────────────────────────┘   │
+│  ┌─────────────────┐    ┌──────────────────────────────┐    │
+│  │  EmbeddingMgr   │    │        LLMRouter             │    │
+│  │  (LRU cache)    │    │  Ollama (local) or           │    │
+│  └────────┬────────┘    │  LiteLLM → Groq / Mistral    │    │
+│           │             └──────────────────────────────┘    │
 └───────────┼─────────────────────────────────────────────────┘
             │ embed query
             ▼
