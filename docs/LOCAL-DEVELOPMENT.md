@@ -19,10 +19,10 @@ git clone https://github.com/<your-org>/rag-azure.git
 cd rag-azure
 
 # 2. Copy environment template
-cp backend/.env.example backend/.env
+cp .env.example .env
 
 # 3. Edit .env with your API keys
-nano backend/.env
+nano .env
 # Add: LITELLM_GROQ_API_KEY=your-key-here
 
 # 4. Start all services
@@ -147,10 +147,10 @@ docker-compose exec frontend npm test
 
 ### Adding a Document
 
-1. Add Markdown file to `docs/example_docs/`
+1. Add Markdown file to `docs/`
 
 ```bash
-echo "# My Document\n\nContent here." > docs/example_docs/my_doc.md
+echo "# My Document\n\nContent here." > docs/my_doc.md
 ```
 
 2. Trigger ingestion:
@@ -222,7 +222,7 @@ QDRANT_COLLECTION_NAME=documents
 
 # LLM
 LITELLM_GROQ_API_KEY=your-groq-key-here
-LITELLM_LLM_MODEL=groq/mixtral-8x7b-32768
+LITELLM_LLM_MODEL=groq/qwen/qwen3-32b
 LITELLM_EMBEDDING_MODEL=mistral-embed
 
 # RAG Configuration
@@ -419,7 +419,7 @@ docker update --memory 4g <container_id>
 ## Next Steps
 
 1. ✅ Deploy locally with docker-compose
-2. 📝 Edit documents in `docs/example_docs/`
+2. 📝 Edit documents in `docs/`
 3. 🧪 Test API endpoints
 4. 🐛 Explore code & make changes
 5. 🚀 Ready for Azure deployment? See DEPLOYMENT-OPTIONS.md

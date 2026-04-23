@@ -10,7 +10,7 @@ function RAGIntroPanel({ onDismiss }) {
       title: 'Document Ingestion',
       short: 'Your documents are split into chunks and stored as vectors.',
       detail:
-        'Markdown files from the docs/ folder are parsed, split into ~512-word overlapping chunks, converted to 768-dimensional embeddings by the embedding model, and upserted into Qdrant. Each chunk keeps a reference to its source file.',
+        'Markdown and text files are parsed, split into ~512-word overlapping chunks, converted to 1024-dimensional embeddings by Mistral Embed, and upserted into Qdrant. Each chunk keeps a reference to its source file.',
     },
     {
       icon: '🔍',
@@ -22,9 +22,9 @@ function RAGIntroPanel({ onDismiss }) {
     {
       icon: '🧠',
       title: 'Context + Generation',
-      short: 'Retrieved chunks become the LLM\'s context window.',
+      short: "Retrieved chunks become the LLM's context window.",
       detail:
-        'The retrieved chunks are injected into a prompt as grounding context, then sent to Groq (mixtral-8x7b) or locally to Ollama (qwen2.5). The LLM generates an answer based only on that context, making hallucination far less likely.',
+        'The retrieved chunks are injected into a prompt as grounding context, then sent to Groq (Qwen3-32B) or locally to Ollama (qwen2.5). The LLM generates an answer based only on that context, making hallucination far less likely.',
     },
     {
       icon: '📊',
@@ -36,9 +36,9 @@ function RAGIntroPanel({ onDismiss }) {
   ];
 
   const possibilities = [
-    '📁 Index your own Markdown / PDF documents',
+    '📁 Upload your own documents via the Upload button',
     '🔑 Switch to Groq or Mistral for cloud inference',
-    '☁️ Deploy to Azure in one Terraform apply',
+    '☁️ Deploy to Azure with one ARM template deploy',
     '🔗 Integrate the /query API into any application',
     '📈 Add Application Insights for usage analytics',
     '🔒 Layer on Azure AD authentication',
@@ -121,7 +121,11 @@ function ChatInterface({ config, onError }) {
   const [loading, setLoading] = useState(false);
   const [topK, setTopK] = useState(5);
   const [showIntro, setShowIntro] = useState(true);
+  const [uploadStatus, setUploadStatus] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [showDocuments, setShowDocuments] = useState(false);
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -131,22 +135,18 @@ function ChatInterface({ config, onError }) {
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    if (config?.storage_configured) {
+      api.listDocuments().then(data => setDocuments(data.documents || [])).catch(() => {});
+    }
+  }, [config]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    if (!input.trim()) {
-      return;
-    }
+    if (!input.trim()) return;
 
     setShowIntro(false);
-
-    const userMessage = {
-      id: Date.now(),
-      type: 'user',
-      text: input,
-      timestamp: new Date(),
-    };
-
+    const userMessage = { id: Date.now(), type: 'user', text: input, timestamp: new Date() };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setLoading(true);
@@ -154,7 +154,6 @@ function ChatInterface({ config, onError }) {
 
     try {
       const response = await api.queryRag(input, topK);
-
       const assistantMessage = {
         id: Date.now() + 1,
         type: 'assistant',
@@ -164,18 +163,14 @@ function ChatInterface({ config, onError }) {
         tokensUsed: response.tokens_used,
         timestamp: new Date(),
       };
-
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
-      console.error('Query error:', error);
-
       const errorMessage = {
         id: Date.now() + 1,
         type: 'error',
         text: error.response?.data?.detail || error.message || 'Failed to get response',
         timestamp: new Date(),
       };
-
       setMessages(prev => [...prev, errorMessage]);
       onError('Query failed. Please try again.');
     } finally {
@@ -186,23 +181,53 @@ function ChatInterface({ config, onError }) {
   const handleIngest = async () => {
     setLoading(true);
     onError(null);
-
     try {
       const response = await api.triggerIngestion();
-      const message = {
-        id: Date.now(),
-        type: 'assistant',
-        text: response.message || 'Ingestion triggered successfully.',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, message]);
+      setMessages(prev => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: 'assistant',
+          text: response.message || 'Ingestion triggered successfully.',
+          timestamp: new Date(),
+        },
+      ]);
     } catch (error) {
-      console.error('Ingestion error:', error);
       onError('Ingestion failed. Please try again.');
     } finally {
       setLoading(false);
     }
   };
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    setUploadStatus({ state: 'uploading', name: file.name });
+    try {
+      const result = await api.uploadDocument(file);
+      setUploadStatus({ state: 'success', name: file.name, message: result.message });
+      // Refresh document list
+      api.listDocuments().then(data => setDocuments(data.documents || [])).catch(() => {});
+    } catch (error) {
+      setUploadStatus({
+        state: 'error',
+        name: file.name,
+        message: error.response?.data?.detail || error.message || 'Upload failed',
+      });
+    }
+  };
+
+  const uploadStatusColor = uploadStatus?.state === 'success'
+    ? '#2e7d32'
+    : uploadStatus?.state === 'error'
+    ? '#c62828'
+    : '#555';
 
   return (
     <div className="chat-interface">
@@ -267,6 +292,7 @@ function ChatInterface({ config, onError }) {
 
       <div className="settings">
         <h3>Settings</h3>
+
         <div className="settings-item">
           <label>
             Top-K Results:
@@ -275,9 +301,7 @@ function ChatInterface({ config, onError }) {
               min="1"
               max="20"
               value={topK}
-              onChange={e =>
-                setTopK(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))
-              }
+              onChange={e => setTopK(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
               style={{
                 marginLeft: '8px',
                 width: '50px',
@@ -289,6 +313,7 @@ function ChatInterface({ config, onError }) {
             />
           </label>
         </div>
+
         <div className="settings-item" style={{ marginTop: '10px' }}>
           <strong>Model Configuration:</strong>
           <div style={{ marginTop: '5px', fontSize: '11px' }}>
@@ -298,13 +323,69 @@ function ChatInterface({ config, onError }) {
             • Embeddings: {config?.embedding_model || 'Loading...'}
           </div>
         </div>
+
+        {/* Upload document */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".md,.txt,.pdf"
+          style={{ display: 'none' }}
+          onChange={handleFileChange}
+        />
+        <button
+          onClick={handleUploadClick}
+          disabled={loading || !config?.storage_configured}
+          className="button-secondary"
+          style={{ marginTop: '15px', width: '100%' }}
+          title={
+            config?.storage_configured
+              ? 'Upload a document to Azure Blob Storage'
+              : 'Azure Blob Storage not configured'
+          }
+        >
+          📤 Upload Document
+        </button>
+
+        {uploadStatus && (
+          <div style={{ marginTop: '6px', fontSize: '11px', color: uploadStatusColor }}>
+            {uploadStatus.state === 'uploading' && `Uploading ${uploadStatus.name}…`}
+            {uploadStatus.state === 'success' && `✓ ${uploadStatus.message}`}
+            {uploadStatus.state === 'error' && `✗ ${uploadStatus.message}`}
+          </div>
+        )}
+
+        {/* Uploaded documents list */}
+        {config?.storage_configured && documents.length > 0 && (
+          <div style={{ marginTop: '10px' }}>
+            <button
+              className="button-link"
+              onClick={() => setShowDocuments(v => !v)}
+              style={{ fontSize: '11px' }}
+            >
+              {showDocuments ? '▲ Hide' : '▼ Show'} uploaded files ({documents.length})
+            </button>
+            {showDocuments && (
+              <div style={{ marginTop: '4px', fontSize: '11px', maxHeight: '120px', overflowY: 'auto' }}>
+                {documents.map((doc, i) => (
+                  <div key={i} style={{ padding: '2px 0', borderBottom: '1px solid #eee' }}>
+                    📄 {doc.name}{' '}
+                    <span style={{ color: '#999' }}>
+                      ({doc.size ? `${(doc.size / 1024).toFixed(1)} KB` : '—'})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <button
           onClick={handleIngest}
           disabled={loading}
           className="button-secondary"
-          style={{ marginTop: '15px', width: '100%' }}
+          style={{ marginTop: '10px', width: '100%' }}
         >
-          {loading ? 'Working...' : 'Re-ingest Documents'}
+          {loading ? 'Working...' : '🔄 Re-ingest Documents'}
         </button>
       </div>
     </div>

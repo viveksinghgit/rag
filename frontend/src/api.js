@@ -80,4 +80,25 @@ export const triggerIngestion = async () => {
   }
 };
 
+export const uploadDocument = async (file, onProgress) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await apiClient.post('/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000,
+    onUploadProgress: onProgress,
+  });
+  return response.data;
+};
+
+export const listDocuments = async () => {
+  try {
+    const response = await apiClient.get('/documents');
+    return response.data;
+  } catch (error) {
+    console.error('List documents failed:', error);
+    throw error;
+  }
+};
+
 export default apiClient;

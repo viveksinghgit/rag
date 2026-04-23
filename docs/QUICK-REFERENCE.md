@@ -3,7 +3,7 @@
 ## 🚀 Start Everything
 
 ```bash
-cd /home/vs/projects/rag
+cd rag
 docker-compose up --build
 ```
 
@@ -30,20 +30,22 @@ QDRANT_VECTOR_SIZE=768
 # .env
 LLM_PROVIDER=litellm
 LITELLM_GROQ_API_KEY=your-key
-LITELLM_LLM_MODEL=groq/mixtral-8x7b-32768
+LITELLM_LLM_MODEL=groq/qwen/qwen3-32b
 ```
 
 ## 📚 Document Ingestion
 
 ```bash
-# Ingest sample documents
-docker exec rag-backend python scripts/ingest_sample_documents.py --sample
+# Ingest all docs (reads docs/ + Azure Blob Storage)
+curl -X POST http://localhost:8000/ingest
 
-# Ingest custom file
-docker exec rag-backend python scripts/ingest_sample_documents.py --file /path/to/doc.txt
+# Or via the UI: click "Re-ingest Documents" in the settings panel
 
-# List indexed documents
-docker exec rag-backend python scripts/ingest_sample_documents.py --list
+# Ingest from a specific directory
+docker exec rag-backend python scripts/ingest_docs.py --docs-dir /path/to/docs
+
+# Upload a file to Blob Storage (cloud deployments)
+# Use the Upload Document button in the chat UI settings panel
 ```
 
 ## 🧪 Test the System
@@ -109,7 +111,7 @@ docker cp rag-ollama:/root/.ollama ./backup/ollama
 ## ⚙️ Configuration Defaults
 
 ```
-QDRANT_VECTOR_SIZE: 768
+QDRANT_VECTOR_SIZE: 1024 (Mistral Embed, cloud) / 768 (nomic-embed-text, local)
 CHUNK_SIZE: 512 tokens
 TOP_K_RETRIEVAL: 5 documents
 SIMILARITY_THRESHOLD: 0.5
@@ -122,7 +124,7 @@ OLLAMA_TIMEOUT: 180 seconds
 |-------|----------|
 | Ollama not downloading models | First run takes 2-5 min, check: `docker logs rag-ollama` |
 | "Connection refused" on queries | Wait for all services healthy: `docker-compose ps` |
-| Embedding dimension mismatch | Ensure vector size matches (768 for nomic-embed-text) |
+| Embedding dimension mismatch | Vector size must match model: 1024 (mistral-embed), 768 (nomic-embed-text) |
 | Out of memory | Increase Docker memory or use smaller model |
 | Frontend not loading | Check backend health: `curl http://localhost:8000/health` |
 

@@ -1,46 +1,47 @@
 """FastAPI Application Entry Point - RAG Azure Backend."""
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import logging
+import shutil
+import subprocess
+import tempfile
 import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import logging
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.models import QueryRequest, QueryResponse, HealthResponse, SourceDocument
 from app.rag_pipeline import get_rag_pipeline
+from app.utils.blob_storage import get_blob_client
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle management."""
-    # Startup
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
-    
-    # Initialize RAG pipeline
     try:
         pipeline = get_rag_pipeline()
         logger.info("✓ RAG Pipeline initialized")
         logger.info(f"  • LLM Provider: {settings.llm_provider}")
-        logger.info(f"  • LLM Model: {settings.ollama_model if settings.llm_provider == 'ollama' else settings.litellm_llm_model}")
-        logger.info(f"  • Embedding Model: {settings.ollama_embedding_model if settings.embedding_provider == 'ollama' else settings.litellm_embedding_model}")
+        logger.info(
+            f"  • LLM Model: {settings.ollama_model if settings.llm_provider == 'ollama' else settings.litellm_llm_model}"
+        )
+        logger.info(
+            f"  • Embedding Model: {settings.ollama_embedding_model if settings.embedding_provider == 'ollama' else settings.litellm_embedding_model}"
+        )
         logger.info(f"  • Qdrant: {settings.qdrant_host}:{settings.qdrant_port}")
     except Exception as e:
-        logger.error(f"⚠️  Warning: RAG Pipeline initialization failed: {str(e)}")
-        logger.error("Some endpoints may fail until backend dependencies are available")
-    
+        logger.error(f"⚠️  RAG Pipeline init failed: {e}")
     yield
-    
-    # Shutdown
     logger.info("Shutting down application")
 
 
-# Initialize FastAPI app
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
@@ -48,7 +49,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -60,7 +60,6 @@ app.add_middleware(
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint."""
     return HealthResponse(
         status="healthy",
         app_name=settings.app_name,
@@ -71,32 +70,14 @@ async def health_check():
 
 @app.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
-    """
-    Process a RAG query.
-    
-    Endpoint: POST /query
-    Request body:
-    {
-        "query": "What is machine learning?",
-        "top_k": 5
-    }
-    
-    Returns a QueryResponse with the generated answer and source documents.
-    """
     try:
         logger.info(f"Processing query: {request.query[:100]}...")
-        
-        # Get RAG pipeline
         pipeline = get_rag_pipeline()
-        
-        # Execute RAG query
         result = pipeline.query(
             user_query=request.query,
             top_k=request.top_k,
             include_sources=True,
         )
-        
-        # Convert to response model
         sources = [
             SourceDocument(
                 text=src["text"],
@@ -106,88 +87,128 @@ async def query(request: QueryRequest):
             )
             for src in result["sources"]
         ]
-        
         return QueryResponse(
             answer=result["answer"],
             sources=sources,
             tokens_used=result["tokens_used"],
-            execution_time_ms=result["execution_time_ms"]
+            execution_time_ms=result["execution_time_ms"],
         )
     except Exception as e:
-        logger.error(f"Error processing query: {str(e)}", exc_info=True)
+        logger.error(f"Error processing query: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload a document to Azure Blob Storage for indexing."""
+    blob = get_blob_client()
+    if blob is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Azure Blob Storage not configured. Set AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY.",
+        )
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    blob.upload(file.filename, content, file.content_type or "application/octet-stream")
+    logger.info("Uploaded document: %s (%d bytes)", file.filename, len(content))
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "size": len(content),
+        "message": f"'{file.filename}' uploaded. Click 'Re-ingest Documents' to index it.",
+    }
+
+
+@app.get("/documents")
+async def list_documents():
+    """List documents stored in Azure Blob Storage."""
+    blob = get_blob_client()
+    if blob is None:
+        return {"documents": [], "storage_configured": False}
+    try:
+        return {"documents": blob.list_blobs(), "storage_configured": True}
+    except Exception as e:
+        logger.error("Failed to list blobs: %s", e)
+        return {"documents": [], "storage_configured": True, "error": str(e)}
 
 
 @app.post("/ingest")
 async def ingest_documents():
     """
-    Trigger document ingestion (batch processing).
-    
-    This endpoint will call the ingestion pipeline to:
-    1. Read documents from docs/ folder or Blob Storage
-    2. Split into chunks
-    3. Generate embeddings
-    4. Upsert to Qdrant
+    Trigger document ingestion.
+
+    Ingests from two sources (whichever are available):
+    1. docs/ — static project documents built into the image
+    2. Azure Blob Storage "documents" container — user-uploaded files
     """
     try:
-        import subprocess
-        from pathlib import Path
-        
         logger.info("Starting document ingestion pipeline...")
-        
-        # Run ingestion script
+
         ingestion_script = Path(__file__).parent.parent / "scripts" / "ingest_docs.py"
-        
-        # Check if script exists
         if not ingestion_script.exists():
-            logger.error(f"Ingestion script not found: {ingestion_script}")
-            raise HTTPException(status_code=500, detail=f"Ingestion script not found: {ingestion_script}")
-        
-        logger.info(f"Running script: {ingestion_script}")
-        
-        result = subprocess.run(
-            ["python", str(ingestion_script), "--docs-dir", "docs"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
-        )
-        
+            raise HTTPException(
+                status_code=500,
+                detail=f"Ingestion script not found: {ingestion_script}",
+            )
+
+        static_docs = Path(__file__).parent.parent / "docs"
+        docs_dirs = [str(static_docs)] if static_docs.exists() else []
+
+        tmp_dir = None
+        blob = get_blob_client()
+        if blob:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="rag_blob_"))
+            try:
+                n = blob.download_all_to_dir(tmp_dir)
+                if n > 0:
+                    logger.info("Downloaded %d files from Blob Storage", n)
+                    docs_dirs.append(str(tmp_dir))
+                else:
+                    logger.info("No files in Blob Storage container")
+            except Exception as exc:
+                logger.warning("Blob download skipped: %s", exc)
+
+        if not docs_dirs:
+            return {"status": "error", "message": "No document sources found."}
+
+        cmd = ["python", str(ingestion_script)]
+        for d in docs_dirs:
+            cmd += ["--docs-dir", d]
+
+        logger.info("Running: %s", " ".join(cmd))
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        finally:
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
         if result.returncode == 0:
             logger.info("✓ Ingestion completed successfully")
             return {
                 "status": "success",
                 "message": "Document ingestion completed",
-                "output": result.stdout[-500:],  # Last 500 chars
+                "output": result.stdout[-500:],
             }
         else:
-            logger.error(f"Ingestion failed: {result.stderr}")
+            logger.error("Ingestion failed: %s", result.stderr)
             return {
                 "status": "error",
                 "message": "Document ingestion failed",
                 "error": result.stderr[-500:],
                 "return_code": result.returncode,
             }
+
     except subprocess.TimeoutExpired:
-        logger.error("Ingestion timed out after 5 minutes")
-        return {
-            "status": "error",
-            "message": "Ingestion timed out after 5 minutes",
-        }
+        logger.error("Ingestion timed out")
+        return {"status": "error", "message": "Ingestion timed out after 5 minutes."}
     except Exception as e:
-        logger.error(f"Error during ingestion: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "message": str(e),
-        }
+        logger.error("Error during ingestion: %s", e, exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 
 @app.get("/config")
 async def get_config():
-    """
-    Get current configuration (non-sensitive).
-    
-    Useful for debugging and verifying deployment settings.
-    """
     return {
         "app_name": settings.app_name,
         "version": settings.app_version,
@@ -199,18 +220,24 @@ async def get_config():
         "qdrant_vector_size": settings.qdrant_vector_size,
         "llm_provider": settings.llm_provider,
         "embedding_provider": settings.embedding_provider,
-        "embedding_model": settings.ollama_embedding_model if settings.embedding_provider == "ollama" else settings.litellm_embedding_model,
-        "llm_model": settings.ollama_model if settings.llm_provider == "ollama" else settings.litellm_llm_model,
+        "embedding_model": (
+            settings.ollama_embedding_model
+            if settings.embedding_provider == "ollama"
+            else settings.litellm_embedding_model
+        ),
+        "llm_model": (
+            settings.ollama_model
+            if settings.llm_provider == "ollama"
+            else settings.litellm_llm_model
+        ),
         "retrieval_limit": settings.retrieval_limit,
+        "storage_configured": bool(
+            settings.azure_storage_account_name and settings.azure_storage_account_key
+        ),
     }
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(
-        app,
-        host=settings.host,
-        port=settings.port,
-        log_level="info",
-    )
+    uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")

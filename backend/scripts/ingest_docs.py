@@ -4,14 +4,12 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.utils.document_processor import get_document_processor
@@ -20,74 +18,65 @@ from app.utils.retriever import get_retriever
 from app.config import settings
 
 
-def ingest_documents(docs_directory: str = "docs"):
+def ingest_documents(docs_directories: list):
     """
-    Main ingestion pipeline - load, process, embed, and index documents.
+    Main ingestion pipeline — load from one or more directories, embed, and index.
 
     Args:
-        docs_directory: Path to directory containing .md files
+        docs_directories: List of directory paths containing .md / .txt files
     """
     logger.info("=" * 60)
     logger.info("🚀 Starting Document Ingestion Pipeline")
     logger.info("=" * 60)
 
-    try:
-        # Load documents
-        logger.info(f"📂 Loading documents from '{docs_directory}'...")
-        processor = get_document_processor()
-        documents = processor.load_documents_from_directory(docs_directory)
+    processor = get_document_processor()
+    all_documents = []
 
-        if not documents:
-            logger.warning("⚠️  No documents found to ingest")
-            return
+    for docs_dir in docs_directories:
+        path = Path(docs_dir)
+        if not path.exists():
+            logger.warning("Directory not found, skipping: %s", docs_dir)
+            continue
+        logger.info("📂 Loading documents from '%s'...", docs_dir)
+        docs = processor.load_documents_from_directory(docs_dir)
+        logger.info("  ✓ Loaded %d chunks from %s", len(docs), docs_dir)
+        all_documents.extend(docs)
 
-        logger.info(f"✓ Loaded {len(documents)} document chunks")
+    if not all_documents:
+        logger.warning("⚠️  No documents found in any provided directory")
+        return
 
-        # Generate IDs
-        logger.info("🔢 Generating document IDs...")
-        documents = processor.generate_document_ids(documents, prefix="")
-        logger.info(f"✓ Generated {len(documents)} document IDs")
+    logger.info("✓ Total document chunks: %d", len(all_documents))
 
-        # Generate embeddings
-        logger.info("🧮 Generating embeddings...")
-        embedding_manager = get_embedding_manager()
+    logger.info("🔢 Generating document IDs...")
+    all_documents = processor.generate_document_ids(all_documents, prefix="")
 
-        embeddings = embedding_manager.embed_documents(
-            [doc["text"] for doc in documents]
-        )
+    logger.info("🧮 Generating embeddings...")
+    embedding_manager = get_embedding_manager()
+    embeddings = embedding_manager.embed_documents([doc["text"] for doc in all_documents])
 
-        # Attach embeddings to documents
-        for doc, embedding in zip(documents, embeddings):
-            doc["embedding"] = embedding
+    for doc, embedding in zip(all_documents, embeddings):
+        doc["embedding"] = embedding
+    logger.info("✓ Generated %d embeddings", len(embeddings))
 
-        logger.info(f"✓ Generated {len(embeddings)} embeddings")
+    logger.info("💾 Upserting documents to Qdrant...")
+    retriever = get_retriever()
 
-        # Upsert to Qdrant
-        logger.info("💾 Upserting documents to Qdrant...")
-        retriever = get_retriever()
+    for i, doc in enumerate(all_documents):
+        doc["id"] = i
 
-        # Convert IDs to integers (Qdrant requirement)
-        for i, doc in enumerate(documents):
-            doc["id"] = i  # Use sequential integer ID
+    result = retriever.upsert_documents(all_documents)
+    logger.info("✓ Upsert result: %s", result)
 
-        result = retriever.upsert_documents(documents)
-        logger.info(f"✓ Upsert result: {result}")
+    collection_info = retriever.get_collection_info()
+    logger.info("📊 Collection info: %s", collection_info)
 
-        # Get collection info
-        collection_info = retriever.get_collection_info()
-        logger.info(f"📊 Collection info: {collection_info}")
-
-        # Summary
-        logger.info("=" * 60)
-        logger.info("✅ Ingestion Complete!")
-        logger.info(f"   • Documents ingested: {len(documents)}")
-        logger.info(f"   • Vectors in collection: {collection_info.get('vectors_count', 'N/A')}")
-        logger.info(f"   • Timestamp: {datetime.utcnow().isoformat()}")
-        logger.info("=" * 60)
-
-    except Exception as e:
-        logger.error(f"❌ Ingestion failed: {str(e)}", exc_info=True)
-        raise
+    logger.info("=" * 60)
+    logger.info("✅ Ingestion Complete!")
+    logger.info("   • Documents ingested: %d", len(all_documents))
+    logger.info("   • Vectors in collection: %s", collection_info.get("vectors_count", "N/A"))
+    logger.info("   • Timestamp: %s", datetime.utcnow().isoformat())
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
@@ -97,10 +86,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--docs-dir",
         type=str,
-        default="docs",
-        help="Path to documents directory",
+        nargs="+",
+        default=["docs"],
+        help="One or more paths to document directories",
     )
-
     args = parser.parse_args()
-
     ingest_documents(args.docs_dir)

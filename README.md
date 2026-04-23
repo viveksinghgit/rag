@@ -82,7 +82,7 @@ The first run pulls the Ollama models (`qwen2.5:0.5b` + `nomic-embed-text`) whic
             ▼
 ┌───────────────────────┐
 │   Qdrant Vector DB    │   ← stores document embeddings
-│   (768-dim COSINE)    │   ← semantic search top-K
+│   (1024-dim COSINE)   │   ← semantic search top-K
 └───────────────────────┘
 ```
 
@@ -91,13 +91,13 @@ The first run pulls the Ollama models (`qwen2.5:0.5b` + `nomic-embed-text`) whic
 ```
 1. User types:    "What is machine learning?"
                    ↓
-2. Embed query:   Convert to 768-dim vector (Ollama nomic-embed-text or Mistral)
+2. Embed query:   Convert to 1024-dim vector (Mistral Embed) or 768-dim (Ollama nomic-embed-text)
                    ↓
 3. Vector search: Qdrant returns top-5 most similar document chunks
                    ↓
 4. Build context: Combine chunks into a prompt prefix
                    ↓
-5. LLM call:      Groq mixtral-8x7b or local qwen2.5 generates the answer
+5. LLM call:      Groq qwen/qwen3-32b or local qwen2.5 generates the answer
                    ↓
 6. Response:      Answer + sources + confidence scores + timing/tokens
                    ↓
@@ -125,10 +125,10 @@ Groq is ~20–50× cheaper than Azure OpenAI for the same models.
 - **Local-first**: Full stack runs offline with Ollama — no API keys required
 - **1-click Azure deploy**: Terraform + ARM template for production
 - **Multi-provider LLM routing**: Groq → Mistral fallback via LiteLLM
-- **Semantic search**: Qdrant with cosine similarity on 768-dim vectors
+- **Semantic search**: Qdrant with cosine similarity on 1024-dim vectors (cloud) or 768-dim (local)
 - **Source tracking**: Every answer cites source documents + confidence scores
 - **Educational UI**: Built-in explanation of how RAG works — great for demos
-- **Document ingestion**: Drop `.md` files in `docs/example_docs/` and re-ingest
+- **Document ingestion**: Upload files via the UI or drop `.md` files in `docs/` and re-ingest
 
 ---
 
@@ -140,10 +140,10 @@ Groq is ~20–50× cheaper than Azure OpenAI for the same models.
 | Backend | FastAPI + Python 3.11 |
 | Vector DB | Qdrant |
 | LLM routing | LiteLLM |
-| LLM (cloud) | Groq `mixtral-8x7b-32768` (primary), Mistral (fallback) |
+| LLM (cloud) | Groq `qwen/qwen3-32b` (primary), Mistral (fallback) |
 | LLM (local) | Ollama `qwen2.5:0.5b` |
 | Embeddings (local) | Ollama `nomic-embed-text` (768-dim) |
-| Embeddings (cloud) | Mistral Embed |
+| Embeddings (cloud) | Mistral `mistral-embed` (1024-dim) |
 | Container | Docker + docker-compose |
 | IaC | Terraform (Azure) |
 | Hosting | Azure App Service + Container Instances + Blob Storage |

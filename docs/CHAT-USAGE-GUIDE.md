@@ -118,22 +118,33 @@ Higher Top-K = more context = slightly slower + more tokens used.
 ### Model Configuration
 Shows what LLM and embedding model the backend is currently using. Configured via `OLLAMA_MODEL` / `LITELLM_LLM_MODEL` in `.env`.
 
+### Upload Document
+Upload a `.md`, `.txt`, or `.pdf` file to Azure Blob Storage. The file will be available for indexing after you click **Re-ingest Documents**. Requires Azure Blob Storage credentials to be configured.
+
 ### Re-ingest Documents
-Triggers the backend to re-read all `.md` files from `docs/example_docs/`, re-chunk them, re-embed, and upsert into Qdrant. Use this after:
-- Adding new documents to `docs/example_docs/`
+Triggers the backend to re-read all files from the `docs/` directory (built-in knowledge base) and any files uploaded to Azure Blob Storage, re-chunk them, re-embed, and upsert into Qdrant. Use this after:
+- Uploading new documents via the Upload button
+- Adding new files to the `docs/` folder
 - Changing `CHUNK_SIZE` or `CHUNK_OVERLAP` in `.env`
-- Changing the embedding model (vector size change requires volume reset)
+- Changing the embedding model (vector size change requires collection reset)
 
 ---
 
 ## Adding Your Own Documents
 
-1. Drop `.md` files into `docs/example_docs/`
-2. Click **Re-ingest Documents** in the settings panel (or `POST /ingest`)
-3. Wait for the success message
+**Option A — Upload via UI (cloud deployments):**
+1. Click **📤 Upload Document** in the settings panel
+2. Select a `.md`, `.txt`, or `.pdf` file
+3. Wait for the upload confirmation
+4. Click **🔄 Re-ingest Documents** to index the new file
+
+**Option B — Add to docs/ directory (local / self-hosted):**
+1. Drop `.md` files into the `docs/` folder
+2. Rebuild the Docker image (or restart if using a volume mount)
+3. Click **🔄 Re-ingest Documents** in the settings panel (or `POST /ingest`)
 4. Start asking questions about your new content
 
-Supported format: **Markdown** (`.md`). HTML tags and code fences are stripped during ingestion. Plain text is chunked into ~512-word segments with 50-word overlap.
+Supported formats: **Markdown** (`.md`), plain text (`.txt`). HTML tags and code fences are stripped during ingestion. Text is chunked into ~512-word segments with 50-word overlap.
 
 ---
 
