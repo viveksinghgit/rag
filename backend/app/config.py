@@ -76,7 +76,7 @@ class Settings(BaseSettings):
         "LITELLM_API_KEY_FILE"
     )
     litellm_embedding_model: str = os.getenv("LITELLM_EMBEDDING_MODEL", "mistral/mistral-embed")
-    litellm_llm_model: str = os.getenv("LITELLM_LLM_MODEL", "groq/mixtral-8x7b-32768")
+    litellm_llm_model: str = os.getenv("LITELLM_LLM_MODEL", "groq/qwen/qwen3-32b")
 
     # Embedding Configuration
     embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", str(qdrant_vector_size)))

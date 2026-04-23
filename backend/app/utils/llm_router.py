@@ -192,7 +192,7 @@ class LLMRouter:
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            fallbacks=["mistral/mistral-medium"],
+            fallbacks=["mistral/mistral-small-latest"],
         )
 
         tokens_used = response.usage.total_tokens
