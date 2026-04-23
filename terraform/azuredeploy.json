@@ -235,7 +235,7 @@
             { "name": "LITELLM_GROQ_API_KEY",               "value": "[parameters('groqApiKey')]" },
             { "name": "LITELLM_MISTRAL_API_KEY",            "value": "[parameters('mistralApiKey')]" },
             { "name": "LITELLM_LLM_MODEL",                  "value": "groq/mixtral-8x7b-32768" },
-            { "name": "LITELLM_EMBEDDING_MODEL",            "value": "mistral-embed" },
+            { "name": "LITELLM_EMBEDDING_MODEL",            "value": "mistral/mistral-embed" },
             { "name": "RETRIEVAL_LIMIT",                    "value": "5" },
             { "name": "SIMILARITY_THRESHOLD",               "value": "0.5" },
             { "name": "CONTEXT_WINDOW_LIMIT",               "value": "2000" },

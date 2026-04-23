@@ -75,7 +75,7 @@ class Settings(BaseSettings):
         "LITELLM_API_KEY",
         "LITELLM_API_KEY_FILE"
     )
-    litellm_embedding_model: str = os.getenv("LITELLM_EMBEDDING_MODEL", "mistral-embed")
+    litellm_embedding_model: str = os.getenv("LITELLM_EMBEDDING_MODEL", "mistral/mistral-embed")
     litellm_llm_model: str = os.getenv("LITELLM_LLM_MODEL", "groq/mixtral-8x7b-32768")
 
     # Embedding Configuration
