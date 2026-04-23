@@ -1,5 +1,6 @@
 """LLM Router - routes generation and embedding calls to Ollama or LiteLLM."""
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -126,8 +127,10 @@ class LLMRouter:
         litellm_module = _get_litellm()
         if settings.litellm_groq_api_key:
             litellm_module.groq_api_key = settings.litellm_groq_api_key
+            os.environ["GROQ_API_KEY"] = settings.litellm_groq_api_key
         if settings.litellm_mistral_api_key:
             litellm_module.mistral_api_key = settings.litellm_mistral_api_key
+            os.environ["MISTRAL_API_KEY"] = settings.litellm_mistral_api_key
         if settings.litellm_api_key:
             litellm_module.api_key = settings.litellm_api_key
 
