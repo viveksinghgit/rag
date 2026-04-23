@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m pip install --upgrade pip setuptools wheel
 
 # Copy requirements and install Python packages to user site-packages
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --user --no-cache-dir --ignore-installed -r requirements.txt
 
 # Stage 2: Runtime
@@ -33,8 +33,10 @@ WORKDIR /app
 # Copy only necessary files from builder
 COPY --from=builder /root/.local /root/.local
 
-# Copy application code
-COPY app/ ./app/
+# Copy application code and documents for ingestion
+COPY backend/app/ ./app/
+COPY backend/scripts/ ./scripts/
+COPY docs/ ./docs/
 
 # Create non-root user for security (optional, for production)
 # RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

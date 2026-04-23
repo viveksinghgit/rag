@@ -51,11 +51,12 @@ jobs:
 
           docker buildx build \
             --push \
+            --file ./backend/Dockerfile \
             --tag "${SHA_TAG}" \
             --tag "${LATEST_TAG}" \
             --cache-from "type=registry,ref=${IMAGE_BASE}:buildcache" \
             --cache-to   "type=registry,ref=${IMAGE_BASE}:buildcache,mode=max" \
-            ./backend
+            .
 
           echo "Pushed: ${SHA_TAG}"
           echo "Pushed: ${LATEST_TAG}"
