@@ -226,22 +226,13 @@ jobs:
             
             if [ -n "$RESPONSE" ]; then
               echo "Got response from ingestion endpoint:"
-              echo "$RESPONSE" | python3 -c "
-              import sys, json
-              try:
-                  data = json.loads(sys.stdin.read())
-                  print(json.dumps(data, indent=2))
-                  if data.get('status') == 'success':
-                      print('✅ Ingestion completed successfully')
-                      sys.exit(0)
-                  else:
-                      print('⚠️  Ingestion completed with warnings/errors')
-                      sys.exit(1)
-              except json.JSONDecodeError as e:
-                  print(f'❌ Invalid JSON response: {e}')
-                  print('Raw response:', repr(sys.stdin.read()[:500]))
-                  sys.exit(1)
-              " && break
+              echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
+              if echo "$RESPONSE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); sys.exit(0 if d.get('status')=='success' else 1)" 2>/dev/null; then
+                echo "Ingestion completed successfully"
+                break
+              else
+                echo "Ingestion completed with warnings/errors"
+              fi
             else
               echo "  No response (attempt ${attempt})"
               if [ $attempt -lt 3 ]; then

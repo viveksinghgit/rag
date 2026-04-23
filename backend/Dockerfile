@@ -19,7 +19,7 @@ RUN python -m pip install --upgrade pip setuptools wheel
 
 # Copy requirements and install Python packages to user site-packages
 COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir --ignore-installed -r requirements.txt
 
 # Stage 2: Runtime
 FROM python:3.11-slim
