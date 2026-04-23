@@ -44,7 +44,7 @@ resource "azurerm_linux_web_app" "backend" {
     QDRANT_PORT                        = "6333"
     QDRANT_COLLECTION_NAME             = "documents"
     QDRANT_ADMIN_KEY                   = var.qdrant_admin_key
-    QDRANT_VECTOR_SIZE                 = "768"
+    QDRANT_VECTOR_SIZE                 = "1024"
     QDRANT_RECREATE_ON_VECTOR_MISMATCH = "false"
     LLM_PROVIDER                       = "litellm"
     EMBEDDING_PROVIDER                 = "litellm"

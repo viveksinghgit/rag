@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     qdrant_host: str = os.getenv("QDRANT_HOST", "qdrant")
     qdrant_port: int = int(os.getenv("QDRANT_PORT", "6333"))
     qdrant_collection_name: str = os.getenv("QDRANT_COLLECTION_NAME", "documents")
-    qdrant_vector_size: int = int(os.getenv("QDRANT_VECTOR_SIZE", "768"))
+    qdrant_vector_size: int = int(os.getenv("QDRANT_VECTOR_SIZE", "1024"))
     qdrant_recreate_on_vector_mismatch: bool = (
         os.getenv("QDRANT_RECREATE_ON_VECTOR_MISMATCH", "true").lower() == "true"
     )

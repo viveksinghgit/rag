@@ -228,7 +228,7 @@
             { "name": "QDRANT_PORT",                        "value": "6333" },
             { "name": "QDRANT_COLLECTION_NAME",             "value": "documents" },
             { "name": "QDRANT_ADMIN_KEY",                   "value": "[parameters('qdrantAdminKey')]" },
-            { "name": "QDRANT_VECTOR_SIZE",                 "value": "768" },
+            { "name": "QDRANT_VECTOR_SIZE",                 "value": "1024" },
             { "name": "QDRANT_RECREATE_ON_VECTOR_MISMATCH", "value": "false" },
             { "name": "LLM_PROVIDER",                       "value": "litellm" },
             { "name": "EMBEDDING_PROVIDER",                 "value": "litellm" },
